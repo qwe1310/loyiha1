@@ -1,5 +1,8 @@
 import os
+import asyncio
 import logging
+import pymysql
+from aiohttp import web
 from telethon import TelegramClient
 
 # Logging sozlamalari
@@ -13,7 +16,6 @@ logger = logging.getLogger(__name__)
 API_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", "10000"))
 
-# Telethon Konfiguratsiyasi (O'zgaruvchilar ishlatilishidan oldin e'lon qilindi)
 TELETHON_API_ID = int(os.getenv("TELETHON_API_ID", "0"))
 TELETHON_API_HASH = os.getenv("TELETHON_API_HASH", "")
 
@@ -39,8 +41,6 @@ MYSQL_CONFIG = {
 }
 
 # ==================== DATABASE FUNCTIONS ====================
-import pymysql
-
 def get_db_connection():
     try:
         return pymysql.connect(**MYSQL_CONFIG)
@@ -63,6 +63,34 @@ def update_balance(user_id, amount):
     finally:
         conn.close()
 
+# ==================== DUMMY WEB SERVER (Render uchun) ====================
+async def handle_ping(request):
+    return web.Response(text="Bot is running active!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    logger.info(f"Dummy Web-Server {PORT}-portda ishga tushdi.")
+
 # ==================== MAIN EXECUTION ====================
-if __name__ == "__main__":
+async def main():
     logger.info("Bot muvaffaqiyatli ishga tushdi...")
+    
+    # Render o'chirib qo'ymasligi uchun fon veb-serverini ishga tushiramiz
+    await start_web_server()
+
+    # Telethon mijozini ishga tushirish (agar seans fayli yoki bot token ishlatilsa)
+    client = TelegramClient('bot_session', TELETHON_API_ID, TELETHON_API_HASH)
+    await client.start(bot_token=API_TOKEN)
+    
+    logger.info("Telethon mijozi muvaffaqiyatli ulashda...")
+    
+    # Dasturni to'xtamasdan ushlab turish uchun doimiy sikl
+    await client.run_until_disconnected()
+
+if __name__ == "__main__":
+    asyncio.run(main())
