@@ -25,30 +25,32 @@ from telethon.network import ConnectionTcpFull
 from contextlib import asynccontextmanager
 import hashlib
 import socks
+from aiohttp import web
 
 # ==================== CONFIGURATION ====================
-API_TOKEN = "8979163459:AAFc5FJGlMTPW72SKdrFsMrfzJ18bjW6zRA"
-ADMIN_ID = 670059053
-ADMIN_USERNAME = "@lock_support"
-BOT_USERNAME_LOGIN = "@lock_numberbot"
+API_TOKEN = os.getenv("API_TOKEN", "8979163459:AAFc5FJGlMTPW72SKdrFsMrfzJ18bjW6zRA")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "670059053"))
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "@lock_support")
+BOT_USERNAME_LOGIN = os.getenv("BOT_USERNAME_LOGIN", "@lock_numberbot")
 
 # MySQL Configuration
 MYSQL_CONFIG = {
-    'host': 'localhost',
-    'port': 3306,
-    'user': 'nomerbot',
-    'password': 'saidakbar0044@',
-    'db': 'nomerbot',
+    'host': os.getenv("MYSQL_HOST", "localhost"),
+    'port': int(os.getenv("MYSQL_PORT", "3306")),
+    'user': os.getenv("MYSQL_USER", "nomerbot"),
+    'password': os.getenv("MYSQL_PASSWORD", "saidakbar0044@"),
+    'db': os.getenv("MYSQL_DB", "nomerbot"),
     'charset': 'utf8mb4',
-    'autocommit': True
+    'autocommit': True,
+    'pool_recycle': 3600
 }
 
 # Telethon Configuration
-TELETHON_API_ID = 39187658
-TELETHON_API_HASH = "4046fb5177b0701a33a73076b8a213aa"
+TELETHON_API_ID = int(os.getenv("TELETHON_API_ID", "39187658"))
+TELETHON_API_HASH = os.getenv("TELETHON_API_HASH", "4046fb5177b0701a33a73076b8a213aa")
 
 # File paths
-SESSIONS_DIR = "sessions"
+SESSIONS_DIR = os.getenv("SESSIONS_DIR", "sessions")
 
 # Constants
 MIN_DEPOSIT = 2000
@@ -201,7 +203,7 @@ def get_main_menu(user_id: int) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🛒 Xaridlarim"), KeyboardButton(text="💳 Hisob to'ldirish")],
     ]
     if user_id == ADMIN_ID:
-        buttons.append([KeyboardButton(text="⚙️ Admin panel")])
+        buttons.append([KeyboardButton(text="⚙️️ Admin panel")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 def get_admin_menu() -> InlineKeyboardMarkup:
@@ -311,7 +313,6 @@ async def delete_session_folder(session_id: str):
     return False
 
 async def notify_admin_new_sale(phone_data: dict, buyer_id: int, buyer_name: str):
-    """Adminga yangi raqam sotilgani haqida xabar yuborish"""
     try:
         text = (
             f"✅ <b>Yangi raqam sotildi!</b>\n\n"
@@ -325,17 +326,13 @@ async def notify_admin_new_sale(phone_data: dict, buyer_id: int, buyer_name: str
             f"   Ism: {buyer_name}\n\n"
             f"📅 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
-        
         await bot.send_message(ADMIN_ID, text)
     except Exception as e:
         print(f"Admin notification error: {e}")
 
 async def notify_admin_broken_session(phone_data: dict, refund_amount: int):
-    """Adminga sessiya buzilgani va pul qaytarilgani haqida xabar yuborish"""
     try:
         buyer_id = phone_data.get('buyer_id', 'Nomalum')
-        
-        # Foydalanuvchi ma'lumotlarini olish
         async with get_db() as (cur, conn):
             await cur.execute("SELECT * FROM users WHERE user_id = %s", (buyer_id,))
             user = await cur.fetchone()
@@ -352,16 +349,13 @@ async def notify_admin_broken_session(phone_data: dict, refund_amount: int):
             f"   Username: @{user['username'] if user and user['username'] else 'yoq'}\n\n"
             f"📅 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
         )
-        
         await bot.send_message(ADMIN_ID, text)
     except Exception as e:
         print(f"Admin broken session notification error: {e}")
 
 async def refund_for_broken_session(phone_id: int, user_id: int):
-    """Buzilgan sessiya uchun foydalanuvchiga pul qaytarish"""
     try:
         async with get_db() as (cur, conn):
-            # Raqam ma'lumotlarini olish
             await cur.execute("""
                 SELECT p.*, c.price as country_price, c.name as country_name
                 FROM phone_numbers p
@@ -371,18 +365,13 @@ async def refund_for_broken_session(phone_id: int, user_id: int):
             phone = await cur.fetchone()
             
             if phone and phone['buyer_id']:
-                # Foydalanuvchiga pul qaytarish
                 refund_amount = phone['country_price']
                 await cur.execute(
                     "UPDATE users SET purchase_balance = purchase_balance + %s WHERE user_id = %s",
                     (refund_amount, phone['buyer_id'])
                 )
                 await conn.commit()
-                
-                # Adminga xabar yuborish
                 await notify_admin_broken_session(phone, refund_amount)
-                
-                # Foydalanuvchiga xabar yuborish
                 try:
                     await bot.send_message(
                         phone['buyer_id'],
@@ -393,7 +382,6 @@ async def refund_for_broken_session(phone_id: int, user_id: int):
                     )
                 except:
                     pass
-                
                 return True
         return False
     except Exception as e:
@@ -401,35 +389,22 @@ async def refund_for_broken_session(phone_id: int, user_id: int):
         return False
 
 async def cleanup_broken_session(phone_id: int, session_id: str, proxy_id: int = None):
-    """Buzilgan sessiyani tozalash - bazadan va fayldan o'chirish"""
     try:
-        # Sessiya papkasini o'chirish
         await delete_session_folder(session_id)
-        
-        # Bazadan o'chirish
         async with get_db() as (cur, conn):
             await cur.execute("DELETE FROM phone_numbers WHERE id = %s", (phone_id,))
             await conn.commit()
-        
-        # Proxy keshini tozalash
         if proxy_id:
             await proxy_manager.clear_cache(proxy_id)
-        
         return True
     except Exception as e:
         print(f"Cleanup error: {e}")
         return False
 
 async def fetch_code_from_session(session_id: str, user_id: int, proxy_id: int = None, phone_id: int = None):
-    """
-    Sessiyadan oxirgi kodni olish.
-    Agar sessiya buzilgan bo'lsa, avtomatik tozalash va pul qaytarish.
-    Qaytaradi: (code: str or None, is_new: bool, error: str or None)
-    """
     session_string = await read_session_file(session_id)
     
     if not session_string:
-        # Sessiya fayli yo'q - tozalash va pul qaytarish
         if phone_id:
             await refund_for_broken_session(phone_id, user_id)
             await cleanup_broken_session(phone_id, session_id, proxy_id)
@@ -447,33 +422,25 @@ async def fetch_code_from_session(session_id: str, user_id: int, proxy_id: int =
     
     try:
         await client.connect()
-        
         if not await client.is_user_authorized():
             await client.disconnect()
-            # Sessiya ishlamaydi - tozalash va pul qaytarish
             if phone_id:
                 await refund_for_broken_session(phone_id, user_id)
                 await cleanup_broken_session(phone_id, session_id, proxy_id)
             return None, False, "Sessiya ishlamay qolgan va o'chirildi! Pulingiz qaytarildi."
         
-        # Telegramdan oxirgi xabarlarni olish
         messages = await client.get_messages(777000, limit=5)
-        
         found_code = None
         
         for msg in messages:
             if msg.message and msg.date:
-                # Login kodini qidirish - aniq formatda
                 code_match = re.search(r'(?:Login code:?\s*)(\d[\d\-\s]{4,8})', msg.message, re.IGNORECASE)
                 if not code_match:
-                    # Oddiy kod formati
                     code_match = re.search(r'\b(\d{5,6})\b', msg.message)
                 
                 if code_match:
                     raw_code = code_match.group(1)
                     clean_code = re.sub(r'[^\d]', '', raw_code)
-                    
-                    # Kod uzunligi 5 yoki 6 bo'lishi kerak
                     if 5 <= len(clean_code) <= 6:
                         found_code = clean_code
                         break
@@ -481,14 +448,12 @@ async def fetch_code_from_session(session_id: str, user_id: int, proxy_id: int =
         await client.disconnect()
         
         if not found_code:
-            return None, False, None  # Kod umuman topilmadi
+            return None, False, None
         
-        # Avvalgi kod bilan solishtirish
         if hasattr(dp, 'temp_purchases') and user_id in dp.temp_purchases:
             old_code = dp.temp_purchases[user_id].get('last_code', '')
-            
             if found_code == old_code:
-                return found_code, False, None  # Kod o'zgarmagan
+                return found_code, False, None
             else:
                 dp.temp_purchases[user_id]['last_code'] = found_code
                 return found_code, True, None
@@ -502,7 +467,6 @@ async def fetch_code_from_session(session_id: str, user_id: int, proxy_id: int =
             await client.disconnect()
         except:
             pass
-        # Auth xatosi - sessiya buzilgan, tozalash va pul qaytarish
         if phone_id:
             await refund_for_broken_session(phone_id, user_id)
             await cleanup_broken_session(phone_id, session_id, proxy_id)
@@ -513,7 +477,6 @@ async def fetch_code_from_session(session_id: str, user_id: int, proxy_id: int =
         except:
             pass
         error_str = str(e)
-        # Agar sessiya bilan bog'liq xato bo'lsa
         if 'auth' in error_str.lower() or 'session' in error_str.lower() or 'key' in error_str.lower():
             if phone_id:
                 await refund_for_broken_session(phone_id, user_id)
@@ -522,8 +485,6 @@ async def fetch_code_from_session(session_id: str, user_id: int, proxy_id: int =
         return None, False, error_str
 
 async def send_code_result_message(chat_id: int, phone: str, password: str, code: str, is_new: bool, error: str, phone_id: int):
-    """Kod natijasini xabar qilib yuborish"""
-    
     if error:
         text = (
             f"❌ <b>Xatolik yuz berdi!</b>\n\n"
@@ -534,7 +495,6 @@ async def send_code_result_message(chat_id: int, phone: str, password: str, code
             [InlineKeyboardButton(text="🔄 Qayta urinish", callback_data=f"get_purchase_code:{phone_id}")],
             [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
         ])
-    
     elif code is None:
         text = (
             f"❌ <b>Kod hali kelmagan!</b>\n\n"
@@ -546,7 +506,6 @@ async def send_code_result_message(chat_id: int, phone: str, password: str, code
         kb = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔄 Qayta kod olish", callback_data=f"refresh_purchase_code:{phone_id}")]
         ])
-    
     elif not is_new:
         formatted_code = '-'.join(list(code))
         text = (
@@ -560,7 +519,6 @@ async def send_code_result_message(chat_id: int, phone: str, password: str, code
             [InlineKeyboardButton(text="🔄 Qayta kod olish", callback_data=f"refresh_purchase_code:{phone_id}")],
             [InlineKeyboardButton(text="✅ Akkauntni oldim", callback_data=f"confirm_purchase:{phone_id}")]
         ])
-    
     else:
         formatted_code = '-'.join(list(code))
         text = (
@@ -578,7 +536,6 @@ async def send_code_result_message(chat_id: int, phone: str, password: str, code
     await bot.send_message(chat_id, text, reply_markup=kb)
 
 async def get_available_phone_by_country(country_code: str):
-    """Davlat bo'yicha mavjud raqamni olish"""
     async with get_db() as (cur, conn):
         await cur.execute(
             """SELECT * FROM phone_numbers 
@@ -592,7 +549,6 @@ async def get_available_phone_by_country(country_code: str):
 @dp.message(Command("start"))
 async def start_command(msg: Message):
     user = await get_or_create_user(msg.from_user.id, msg.from_user.full_name, msg.from_user.username)
-    
     await msg.answer(
         f"👋 Xush kelibsiz, {msg.from_user.full_name}!\n\n"
         "📱 Bu bot orqali siz Telegram akkauntlarini sotib olishingiz mumkin.\n\n"
@@ -604,20 +560,14 @@ async def start_command(msg: Message):
 @dp.callback_query(F.data == "cancel_admin")
 async def cancel_admin_process(call: CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    
-    # Agar sessiya ochilgan bo'lsa, uni o'chirish
     if 'client' in data:
         try:
             client = data['client']
             await client.disconnect()
-            print("✅ Sessiya uzildi")
         except:
             pass
-    
-    # Agar sessiya fayli yaratilgan bo'lsa, uni o'chirish
     if 'temp_session_id' in data:
         await delete_session_folder(data['temp_session_id'])
-        print(f"✅ Temp sessiya fayli o'chirildi: {data['temp_session_id']}")
     
     await state.clear()
     await call.message.delete()
@@ -635,7 +585,6 @@ async def admin_panel(msg: Message):
     if msg.from_user.id != ADMIN_ID:
         await msg.answer("⛔ Siz admin emassiz!")
         return
-    
     await msg.answer(
         "⚙️ <b>Admin panel</b>\n\nKerakli bo'limni tanlang:",
         reply_markup=get_admin_menu()
@@ -648,12 +597,10 @@ async def admin_proxy_status(call: CallbackQuery):
         return await call.answer("⛔ Faqat admin!")
     
     text = "📡 <b>Proxy holati:</b>\n\n"
-    
     for proxy in PROXY_LIST:
         usage = await proxy_manager.get_proxy_usage(proxy['id'])
         remaining = MAX_ACCOUNTS_PER_PROXY - usage
         status_emoji = "🟢" if remaining > 0 else "🔴"
-        
         text += (
             f"{status_emoji} <b>Proxy #{proxy['id']}</b>\n"
             f"   IP: <code>{proxy['ip']}:{proxy['port']}</code>\n"
@@ -665,7 +612,6 @@ async def admin_proxy_status(call: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
     await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
 
@@ -678,19 +624,14 @@ async def admin_statistics(call: CallbackQuery):
     async with get_db() as (cur, conn):
         await cur.execute("SELECT COUNT(*) as total FROM users")
         total_users = (await cur.fetchone())['total']
-        
         await cur.execute("SELECT SUM(purchase_balance) as total FROM users")
         total_balance = (await cur.fetchone())['total'] or 0
-        
         await cur.execute("SELECT COUNT(*) as total FROM phone_numbers")
         total_phones = (await cur.fetchone())['total']
-        
         await cur.execute("SELECT COUNT(*) as total FROM phone_numbers WHERE status = 'available'")
         available_phones = (await cur.fetchone())['total']
-        
         await cur.execute("SELECT COUNT(*) as total FROM phone_numbers WHERE status = 'sold'")
         sold_phones = (await cur.fetchone())['total']
-        
         await cur.execute("SELECT SUM(price) as total FROM phone_numbers WHERE status = 'sold'")
         total_sold_price = (await cur.fetchone())['total'] or 0
     
@@ -708,7 +649,6 @@ async def admin_statistics(call: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
     await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
 
@@ -716,7 +656,6 @@ async def admin_statistics(call: CallbackQuery):
 async def back_to_admin(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     await call.message.edit_text(
         "⚙️ <b>Admin panel</b>\n\nKerakli bo'limni tanlang:",
         reply_markup=get_admin_menu()
@@ -737,21 +676,15 @@ async def admin_countries_menu(call: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
-    await call.message.edit_text(
-        "🌐 <b>Davlatlarni sozlash</b>\n\nKerakli amalni tanlang:",
-        reply_markup=kb
-    )
+    await call.message.edit_text("🌐 <b>Davlatlarni sozlash</b>\n\nKerakli amalni tanlang:", reply_markup=kb)
     await call.answer()
 
 @dp.callback_query(F.data == "country_add")
 async def country_add_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     await call.message.edit_text(
-        "🌐 Davlat nomini va bayrog'ini kiriting:\n"
-        "Masalan: 🇺🇿 O'zbekiston",
+        "🌐 Davlat nomini va bayrog'ini kiriting:\nMasalan: 🇺🇿 O'zbekiston",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.wait_country_name)
@@ -761,13 +694,10 @@ async def country_add_start(call: CallbackQuery, state: FSMContext):
 async def country_add_name(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     country_name = msg.text.strip()
     await state.update_data(country_name=country_name)
-    
     await msg.answer(
-        f"💰 <b>{country_name}</b> uchun narx kiriting (so'mda):\n"
-        f"Masalan: 8000",
+        f"💰 <b>{country_name}</b> uchun narx kiriting (so'mda):\nMasalan: 8000",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.wait_country_price)
@@ -776,7 +706,6 @@ async def country_add_name(msg: Message, state: FSMContext):
 async def country_add_price(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     try:
         price = int(msg.text.strip().replace(',', '').replace(' ', ''))
         if price < 1000:
@@ -799,11 +728,8 @@ async def country_add_price(msg: Message, state: FSMContext):
         await conn.commit()
     
     await state.clear()
-    
     await msg.answer(
-        f"✅ <b>{country_name}</b> muvaffaqiyatli qo'shildi!\n"
-        f"💰 Narxi: {price:,} so'm\n"
-        f"🆔 Kodi: {code}",
+        f"✅ <b>{country_name}</b> muvaffaqiyatli qo'shildi!\n💰 Narxi: {price:,} so'm\n🆔 Kodi: {code}",
         reply_markup=get_main_menu(ADMIN_ID)
     )
 
@@ -811,15 +737,12 @@ async def country_add_price(msg: Message, state: FSMContext):
 async def country_edit_list(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     countries = await get_countries_with_stats()
-    
     if not countries:
         await call.answer("❌ Hech qanday davlat mavjud emas!", show_alert=True)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[])
-    
     for country in countries:
         kb.inline_keyboard.append([
             InlineKeyboardButton(
@@ -827,21 +750,16 @@ async def country_edit_list(call: CallbackQuery):
                 callback_data=f"country_edit_select:{country['code']}"
             )
         ])
-    
     kb.inline_keyboard.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_countries")])
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")])
     
-    await call.message.edit_text(
-        "✏️ <b>Davlatni tahrirlash</b>\n\nTahrirlamoqchi bo'lgan davlatni tanlang:",
-        reply_markup=kb
-    )
+    await call.message.edit_text("✏️ <b>Davlatni tahrirlash</b>\n\nTahrirlamoqchi bo'lgan davlatni tanlang:", reply_markup=kb)
     await call.answer()
 
 @dp.callback_query(F.data.startswith("country_edit_select:"))
 async def country_edit_select(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     code = call.data.split(":")[1]
     
     async with get_db() as (cur, conn):
@@ -853,31 +771,22 @@ async def country_edit_select(call: CallbackQuery, state: FSMContext):
         return
     
     await state.update_data(edit_country_code=code, edit_country_name=country['name'], edit_country_price=country['price'])
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📝 Nomini o'zgartirish", callback_data="country_edit_name")],
         [InlineKeyboardButton(text="💰 Narxini o'zgartirish", callback_data="country_edit_price")],
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="country_edit_list")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
-    await call.message.edit_text(
-        f"✏️ <b>{country['name']}</b> - {country['price']:,} so'm\n\nNimani tahrirlamoqchisiz?",
-        reply_markup=kb
-    )
+    await call.message.edit_text(f"✏️ <b>{country['name']}</b> - {country['price']:,} so'm\n\nNimani tahrirlamoqchisiz?", reply_markup=kb)
     await call.answer()
 
 @dp.callback_query(F.data == "country_edit_name")
 async def country_edit_name_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     data = await state.get_data()
-    
     await call.message.edit_text(
-        f"📝 Yangi nom kiriting (bayroq emoji bilan):\n\n"
-        f"Eski nom: {data.get('edit_country_name', 'Nomalum')}\n\n"
-        f"Masalan: 🇺🇿 O'zbekiston",
+        f"📝 Yangi nom kiriting (bayroq emoji bilan):\n\nEski nom: {data.get('edit_country_name', 'Nomalum')}\n\nMasalan: 🇺🇿 O'zbekiston",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.wait_edit_country_name)
@@ -887,7 +796,6 @@ async def country_edit_name_start(call: CallbackQuery, state: FSMContext):
 async def country_edit_name_finish(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     new_name = msg.text.strip()
     data = await state.get_data()
     code = data['edit_country_code']
@@ -897,22 +805,15 @@ async def country_edit_name_finish(msg: Message, state: FSMContext):
         await conn.commit()
     
     await state.clear()
-    
-    await msg.answer(
-        f"✅ Davlat nomi yangilandi: <b>{new_name}</b>",
-        reply_markup=get_main_menu(ADMIN_ID)
-    )
+    await msg.answer(f"✅ Davlat nomi yangilandi: <b>{new_name}</b>", reply_markup=get_main_menu(ADMIN_ID))
 
 @dp.callback_query(F.data == "country_edit_price")
 async def country_edit_price_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     data = await state.get_data()
-    
     await call.message.edit_text(
-        f"💰 Yangi narx kiriting (so'mda):\n\n"
-        f"Eski narx: {data.get('edit_country_price', 0):,} so'm",
+        f"💰 Yangi narx kiriting (so'mda):\n\nEski narx: {data.get('edit_country_price', 0):,} so'm",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.wait_edit_country_price)
@@ -922,7 +823,6 @@ async def country_edit_price_start(call: CallbackQuery, state: FSMContext):
 async def country_edit_price_finish(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     try:
         new_price = int(msg.text.strip().replace(',', '').replace(' ', ''))
         if new_price < 1000:
@@ -936,57 +836,32 @@ async def country_edit_price_finish(msg: Message, state: FSMContext):
     
     async with get_db() as (cur, conn):
         await cur.execute("UPDATE countries SET price = %s WHERE code = %s", (new_price, code))
-        await cur.execute(
-            "UPDATE phone_numbers SET price = %s WHERE country_code = %s AND status = 'available'",
-            (new_price, code)
-        )
+        await cur.execute("UPDATE phone_numbers SET price = %s WHERE country_code = %s AND status = 'available'", (new_price, code))
         await conn.commit()
     
     await state.clear()
-    
-    await msg.answer(
-        f"✅ Narx yangilandi: <b>{new_price:,} so'm</b>",
-        reply_markup=get_main_menu(ADMIN_ID)
-    )
+    await msg.answer(f"✅ Narx yangilandi: <b>{new_price:,} so'm</b>", reply_markup=get_main_menu(ADMIN_ID))
 
 @dp.callback_query(F.data == "country_delete")
 async def country_delete_list(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     countries = await get_countries_with_stats()
-    
     if not countries:
         await call.answer("❌ Hech qanday davlat mavjud emas!", show_alert=True)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[])
-    
     for country in countries:
         if country['available_count'] == 0:
-            kb.inline_keyboard.append([
-                InlineKeyboardButton(
-                    text=f"❌ {country['name']} (0 ta raqam)",
-                    callback_data=f"country_delete_confirm:{country['code']}"
-                )
-            ])
+            kb.inline_keyboard.append([InlineKeyboardButton(text=f"❌ {country['name']} (0 ta raqam)", callback_data=f"country_delete_confirm:{country['code']}")])
         else:
-            kb.inline_keyboard.append([
-                InlineKeyboardButton(
-                    text=f"🔒 {country['name']} ({country['available_count']} ta raqam)",
-                    callback_data="country_cant_delete"
-                )
-            ])
+            kb.inline_keyboard.append([InlineKeyboardButton(text=f"🔒 {country['name']} ({country['available_count']} ta raqam)", callback_data="country_cant_delete")])
     
     kb.inline_keyboard.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_countries")])
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")])
     
-    await call.message.edit_text(
-        "🗑 <b>Davlatni o'chirish</b>\n\n"
-        "Faqat faol raqamlari bo'lmagan davlatlarni o'chira olasiz!\n"
-        "O'chirmoqchi bo'lgan davlatni tanlang:",
-        reply_markup=kb
-    )
+    await call.message.edit_text("🗑 <b>Davlatni o'chirish</b>\n\nFaqat faol raqamlari bo'lmagan davlatlarni o'chira olasiz!\nO'chirmoqchi bo'lgan davlatni tanlang:", reply_markup=kb)
     await call.answer()
 
 @dp.callback_query(F.data == "country_cant_delete")
@@ -997,7 +872,6 @@ async def country_cant_delete(call: CallbackQuery):
 async def country_delete_confirm(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     code = call.data.split(":")[1]
     
     async with get_db() as (cur, conn):
@@ -1011,26 +885,18 @@ async def country_delete_confirm(call: CallbackQuery):
 async def country_list_show(call: CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
     countries = await get_countries_with_stats()
-    
     if not countries:
         text = "❌ Hech qanday davlat mavjud emas!"
     else:
         text = "📋 <b>Davlatlar ro'yxati:</b>\n\n"
-        
         for i, country in enumerate(countries, 1):
-            text += (
-                f"{i}. <b>{country['name']}</b>\n"
-                f"   💰 Narx: {country['price']:,} so'm\n"
-                f"   🟢 Faol raqamlar: {country['available_count']} ta\n\n"
-            )
+            text += f"{i}. <b>{country['name']}</b>\n   💰 Narx: {country['price']:,} so'm\n   🟢 Faol raqamlar: {country['available_count']} ta\n\n"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_countries")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
     await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
 
@@ -1039,12 +905,7 @@ async def country_list_show(call: CallbackQuery):
 async def admin_user_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
-    await call.message.edit_text(
-        "👤 <b>Foydalanuvchi boshqaruvi</b>\n\n"
-        "Boshqarmoqchi bo'lgan foydalanuvchi ID raqamini kiriting:",
-        reply_markup=get_cancel_keyboard()
-    )
+    await call.message.edit_text("👤 <b>Foydalanuvchi boshqaruvi</b>\n\nBoshqarmoqchi bo'lgan foydalanuvchi ID raqamini kiriting:", reply_markup=get_cancel_keyboard())
     await state.set_state(AdminStates.wait_user_id)
     await call.answer()
 
@@ -1052,7 +913,6 @@ async def admin_user_start(call: CallbackQuery, state: FSMContext):
 async def admin_user_show(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     try:
         user_id = int(msg.text.strip())
     except:
@@ -1068,7 +928,6 @@ async def admin_user_show(msg: Message, state: FSMContext):
         return
     
     await state.update_data(edit_user_id=user_id)
-    
     text = (
         f"👤 <b>Foydalanuvchi ma'lumotlari</b>\n\n"
         f"🆔 ID: <code>{user['user_id']}</code>\n"
@@ -1078,25 +937,19 @@ async def admin_user_show(msg: Message, state: FSMContext):
         f"💵 Yechib olish balansi: {user['withdraw_balance']:,} so'm\n"
         f"🛒 Xaridlar: {user['total_purchased']} ta"
     )
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💰 Balans qo'shish", callback_data="user_add_balance")],
         [InlineKeyboardButton(text="💸 Balansdan yechish", callback_data="user_sub_balance")],
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
     await msg.answer(text, reply_markup=kb)
 
 @dp.callback_query(F.data == "user_add_balance")
 async def user_add_balance_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
-    await call.message.edit_text(
-        "💰 Qo'shmoqchi bo'lgan summani kiriting (so'mda):",
-        reply_markup=get_cancel_keyboard()
-    )
+    await call.message.edit_text("💰 Qo'shmoqchi bo'lgan summani kiriting (so'mda):", reply_markup=get_cancel_keyboard())
     await state.set_state(AdminStates.wait_user_balance)
     await call.answer()
 
@@ -1104,11 +957,7 @@ async def user_add_balance_start(call: CallbackQuery, state: FSMContext):
 async def user_sub_balance_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
-    await call.message.edit_text(
-        "💸 Yechmoqchi bo'lgan summani kiriting (so'mda):",
-        reply_markup=get_cancel_keyboard()
-    )
+    await call.message.edit_text("💸 Yechmoqchi bo'lgan summani kiriting (so'mda):", reply_markup=get_cancel_keyboard())
     await state.set_state(AdminStates.wait_user_withdraw)
     await call.answer()
 
@@ -1116,7 +965,6 @@ async def user_sub_balance_start(call: CallbackQuery, state: FSMContext):
 async def user_add_balance_finish(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     try:
         amount = int(msg.text.strip().replace(',', '').replace(' ', ''))
         if amount <= 0:
@@ -1127,20 +975,14 @@ async def user_add_balance_finish(msg: Message, state: FSMContext):
     
     data = await state.get_data()
     user_id = data.get('edit_user_id')
-    
     await update_balance(user_id, amount, 'purchase')
     await state.clear()
-    
-    await msg.answer(
-        f"✅ Foydalanuvchi (ID: {user_id}) balansiga {amount:,} so'm qo'shildi!",
-        reply_markup=get_main_menu(ADMIN_ID)
-    )
+    await msg.answer(f"✅ Foydalanuvchi (ID: {user_id}) balansiga {amount:,} so'm qo'shildi!", reply_markup=get_main_menu(ADMIN_ID))
 
 @dp.message(AdminStates.wait_user_withdraw)
 async def user_sub_balance_finish(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     try:
         amount = int(msg.text.strip().replace(',', '').replace(' ', ''))
         if amount <= 0:
@@ -1151,14 +993,9 @@ async def user_sub_balance_finish(msg: Message, state: FSMContext):
     
     data = await state.get_data()
     user_id = data.get('edit_user_id')
-    
     await update_balance(user_id, -amount, 'purchase')
     await state.clear()
-    
-    await msg.answer(
-        f"✅ Foydalanuvchi (ID: {user_id}) balansidan {amount:,} so'm yechildi!",
-        reply_markup=get_main_menu(ADMIN_ID)
-    )
+    await msg.answer(f"✅ Foydalanuvchi (ID: {user_id}) balansidan {amount:,} so'm yechildi!", reply_markup=get_main_menu(ADMIN_ID))
 
 # ==================== ADMIN: TO'LOV SOZLAMALARI ====================
 @dp.callback_query(F.data == "admin_payment")
@@ -1185,7 +1022,6 @@ async def admin_payment_settings(call: CallbackQuery):
         [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin")],
         [InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")]
     ])
-    
     await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
 
@@ -1193,12 +1029,7 @@ async def admin_payment_settings(call: CallbackQuery):
 async def payment_edit_start(call: CallbackQuery, state: FSMContext):
     if call.from_user.id != ADMIN_ID:
         return await call.answer("⛔ Faqat admin!")
-    
-    await call.message.edit_text(
-        "💳 Yangi karta raqamini kiriting:\n"
-        "Masalan: 8600123456789012",
-        reply_markup=get_cancel_keyboard()
-    )
+    await call.message.edit_text("💳 Yangi karta raqamini kiriting:\nMasalan: 8600123456789012", reply_markup=get_cancel_keyboard())
     await state.set_state(AdminStates.wait_payment_card)
     await call.answer()
 
@@ -1206,24 +1037,16 @@ async def payment_edit_start(call: CallbackQuery, state: FSMContext):
 async def payment_edit_card(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     card_number = msg.text.strip()
     await state.update_data(card_number=card_number)
-    
-    await msg.answer(
-        "👤 Karta egasi ismini kiriting:\n"
-        "Masalan: ALIYEV ALISHER",
-        reply_markup=get_cancel_keyboard()
-    )
+    await msg.answer("👤 Karta egasi ismini kiriting:\nMasalan: ALIYEV ALISHER", reply_markup=get_cancel_keyboard())
     await state.set_state(AdminStates.wait_payment_owner)
 
 @dp.message(AdminStates.wait_payment_owner)
 async def payment_edit_finish(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     data = await state.get_data()
-    
     async with get_db() as (cur, conn):
         await cur.execute("UPDATE payment_methods SET is_active = FALSE")
         await cur.execute(
@@ -1233,11 +1056,8 @@ async def payment_edit_finish(msg: Message, state: FSMContext):
         await conn.commit()
     
     await state.clear()
-    
     await msg.answer(
-        f"✅ To'lov ma'lumotlari yangilandi!\n\n"
-        f"💳 {data['card_number']}\n"
-        f"👤 {msg.text.strip()}",
+        f"✅ To'lov ma'lumotlari yangilandi!\n\n💳 {data['card_number']}\n👤 {msg.text.strip()}",
         reply_markup=get_main_menu(ADMIN_ID)
     )
 
@@ -1248,31 +1068,20 @@ async def admin_sell_number_start(call: CallbackQuery):
         return await call.answer("⛔ Faqat admin!")
     
     proxy_info = await proxy_manager.get_available_proxy()
-    
     if not proxy_info:
-        await call.answer(
-            "⚠️ Barcha proxylarda bo'sh joy qolmagan!\n\n"
-            "Iltimos, avval akkauntlarni soting yoki yangi proxy qo'shing.",
-            show_alert=True
-        )
+        await call.answer("⚠️ Barcha proxylarda bo'sh joy qolmagan!\n\nIltimos, avval akkauntlarni soting yoki yangi proxy qo'shing.", show_alert=True)
         return
     
     countries = await get_countries_with_stats()
-    
     if not countries:
         await call.answer("❌ Hech qanday davlat mavjud emas!", show_alert=True)
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[])
-    
     for country in countries:
         kb.inline_keyboard.append([
-            InlineKeyboardButton(
-                text=f"{country['name']} - {country['price']:,} so'm",
-                callback_data=f"admin_sell_country:{country['code']}"
-            )
+            InlineKeyboardButton(text=f"{country['name']} - {country['price']:,} so'm", callback_data=f"admin_sell_country:{country['code']}")
         ])
-    
     kb.inline_keyboard.append([InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_admin")])
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")])
     
@@ -1292,7 +1101,6 @@ async def admin_sell_get_phone(call: CallbackQuery, state: FSMContext):
         return await call.answer("⛔ Faqat admin!")
     
     country_code = call.data.split(":")[1]
-    
     proxy_info = await proxy_manager.get_available_proxy()
     if not proxy_info:
         await call.answer("⚠️ Proxylarda bo'sh joy qolmadi!", show_alert=True)
@@ -1310,9 +1118,7 @@ async def admin_sell_get_phone(call: CallbackQuery, state: FSMContext):
     )
     
     await call.message.edit_text(
-        f"📱 <b>{country['name']}</b> uchun raqamni yuboring:\n\n"
-        f"Format: +998901234567\n\n"
-        f"📡 Proxy: {proxy_info['proxy']['ip']}",
+        f"📱 <b>{country['name']}</b> uchun raqamni yuboring:\n\nFormat: +998901234567\n\n📡 Proxy: {proxy_info['proxy']['ip']}",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(AdminStates.wait_sell_phone)
@@ -1322,38 +1128,27 @@ async def admin_sell_get_phone(call: CallbackQuery, state: FSMContext):
 async def admin_sell_send_code(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     phone = msg.text.strip().replace(' ', '')
-    
     if not phone.startswith('+') or not re.match(r'^\+\d+$', phone):
         await msg.answer("❌ Noto'g'ri format! + bilan boshlanib, faqat raqamlar bo'lishi kerak.", reply_markup=get_cancel_keyboard())
         return
     
     await state.update_data(phone=phone)
-    
     data = await state.get_data()
     proxy_config = proxy_manager.get_proxy_config(data['proxy_id'])
     proxy = proxy_manager.create_proxy_client(proxy_config) if proxy_config else None
     
     wait_msg = await msg.answer(f"⏳ Kod yuborilmoqda... (Proxy: {proxy_config['ip']})")
     
-    client = TelegramClient(
-        StringSession(), 
-        TELETHON_API_ID, 
-        TELETHON_API_HASH,
-        proxy=proxy
-    )
-    
+    client = TelegramClient(StringSession(), TELETHON_API_ID, TELETHON_API_HASH, proxy=proxy)
     try:
         await client.connect()
         sent_code = await client.send_code_request(phone)
         
-        # Sessiyani saqlash
         import uuid
         temp_session_id = str(uuid.uuid4())
         session_string = client.session.save()
         
-        # Vaqtinchalik sessiya faylini yaratish
         folder_path = await create_session_folder(temp_session_id)
         filepath = os.path.join(folder_path, "connect.session")
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -1362,30 +1157,22 @@ async def admin_sell_send_code(msg: Message, state: FSMContext):
         await state.update_data(
             client=client,
             phone_code_hash=sent_code.phone_code_hash,
-            temp_session_id=temp_session_id  # Sessiya ID sini saqlash
+            temp_session_id=temp_session_id
         )
         
         await wait_msg.edit_text(
-            f"✅ Kod yuborildi!\n\n"
-            f"📱 {phone}\n"
-            f"📡 Proxy: {proxy_config['ip']}\n\n"
-            f"Kodni 8-8-8-8-8 formatida yuboring:",
+            f"✅ Kod yuborildi!\n\n📱 {phone}\n📡 Proxy: {proxy_config['ip']}\n\nKodni 8-8-8-8-8 formatida yuboring:",
             reply_markup=get_cancel_keyboard()
         )
         await state.set_state(AdminStates.wait_sell_code)
-        
     except Exception as e:
-        await wait_msg.edit_text(
-            f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.",
-            reply_markup=get_cancel_keyboard()
-        )
+        await wait_msg.edit_text(f"❌ Xatolik: {str(e)}\n\nQaytadan urinib ko'ring.", reply_markup=get_cancel_keyboard())
         await client.disconnect()
 
 @dp.message(AdminStates.wait_sell_code)
 async def admin_sell_verify_code(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     code_input = msg.text.strip()
     code_clean = code_input.replace('-', '').replace(' ', '')
     
@@ -1400,7 +1187,6 @@ async def admin_sell_verify_code(msg: Message, state: FSMContext):
     
     try:
         await client.sign_in(phone, code_clean, phone_code_hash=phone_code_hash)
-        
         has_2fa = False
         try:
             await client.get_me()
@@ -1408,21 +1194,13 @@ async def admin_sell_verify_code(msg: Message, state: FSMContext):
             has_2fa = True
         
         if has_2fa:
-            await msg.answer(
-                "🔐 Bu akkauntda 2-bosqichli parol mavjud!\n\n"
-                "Iltimos, 2FA parolini kiriting:",
-                reply_markup=get_cancel_keyboard()
-            )
+            await msg.answer("🔐 Bu akkauntda 2-bosqichli parol mavjud!\n\nIltimos, 2FA parolini kiriting:", reply_markup=get_cancel_keyboard())
             await state.set_state(AdminStates.wait_sell_2fa)
             return
         
         await setup_2fa_and_save(client, phone, data, msg, state)
-        
     except errors.SessionPasswordNeededError:
-        await msg.answer(
-            "🔐 2FA parolini kiriting:",
-            reply_markup=get_cancel_keyboard()
-        )
+        await msg.answer("🔐 2FA parolini kiriting:", reply_markup=get_cancel_keyboard())
         await state.set_state(AdminStates.wait_sell_2fa)
     except Exception as e:
         await msg.answer(f"❌ Xatolik: {str(e)}", reply_markup=get_cancel_keyboard())
@@ -1433,7 +1211,6 @@ async def admin_sell_verify_code(msg: Message, state: FSMContext):
 async def admin_sell_verify_2fa(msg: Message, state: FSMContext):
     if msg.from_user.id != ADMIN_ID:
         return
-    
     password_2fa = msg.text.strip()
     data = await state.get_data()
     client = data.get("client")
@@ -1447,27 +1224,22 @@ async def admin_sell_verify_2fa(msg: Message, state: FSMContext):
 
 async def setup_2fa_and_save(client, phone, data, msg_or_call, state):
     new_password = await generate_random_password()
-    
     try:
         try:
             await client.delete_dialog(777000)
-            print(f"✅ {phone} - Kod xabarlari tozalandi (777000)")
         except Exception as e:
-            print(f"⚠️ {phone} - Chat tozalashda xatolik: {e}")
+            print(f"⚠️ Chat tozalashda xatolik: {e}")
         
         try:
             await client.edit_2fa(new_password=new_password)
-            print(f"✅ {phone} - 2FA muvaffaqiyatli o'rnatildi")
         except Exception as e:
-            print(f"⚠️ {phone} - 2FA o'rnatishda xatolik: {e}")
+            print(f"⚠️️ 2FA o'rnatishda xatolik: {e}")
         
         session_string = client.session.save()
         import uuid
         session_id = str(uuid.uuid4())
-        
         await save_session_file(session_string, session_id)
         
-        data = await state.get_data()
         country_code = data.get('country_code')
         proxy_id = data.get('proxy_id')
         
@@ -1482,14 +1254,11 @@ async def setup_2fa_and_save(client, phone, data, msg_or_call, state):
             )
             await conn.commit()
         
-        # Temp sessiyani o'chirish
         if 'temp_session_id' in data:
             await delete_session_folder(data['temp_session_id'])
-            print(f"✅ Temp sessiya o'chirildi: {data['temp_session_id']}")
         
         await state.clear()
         await proxy_manager.clear_cache(proxy_id)
-        
         proxy_config = proxy_manager.get_proxy_config(proxy_id)
         proxy_ip = proxy_config['ip'] if proxy_config else 'Nomalum'
         
@@ -1508,22 +1277,16 @@ async def setup_2fa_and_save(client, phone, data, msg_or_call, state):
         else:
             await msg_or_call.message.edit_text(success_text)
             await msg_or_call.message.answer("🔙 Admin panelga qaytish uchun:", reply_markup=get_main_menu(ADMIN_ID))
-        
         await client.disconnect()
-        
     except Exception as e:
         error_text = f"❌ Xatolik yuz berdi: {str(e)}"
-        
-        # Xato bo'lsa ham temp sessiyani o'chirish
         if 'temp_session_id' in data:
             await delete_session_folder(data['temp_session_id'])
-            print(f"✅ Xatolik tufayli temp sessiya o'chirildi: {data['temp_session_id']}")
         
         if hasattr(msg_or_call, 'answer'):
             await msg_or_call.answer(error_text, reply_markup=get_cancel_keyboard())
         else:
             await msg_or_call.message.edit_text(error_text)
-        
         await client.disconnect()
         await state.clear()
 
@@ -1545,7 +1308,6 @@ async def buy_number_intro(msg: Message):
 @dp.callback_query(F.data == "buy_continue")
 async def buy_show_countries(call: CallbackQuery):
     countries = await get_countries_with_stats()
-    
     available_countries = [c for c in countries if c['available_count'] > 0]
     
     if not available_countries:
@@ -1558,7 +1320,6 @@ async def buy_show_countries(call: CallbackQuery):
         return
     
     kb = InlineKeyboardMarkup(inline_keyboard=[])
-    
     for country in available_countries:
         kb.inline_keyboard.append([
             InlineKeyboardButton(
@@ -1566,20 +1327,13 @@ async def buy_show_countries(call: CallbackQuery):
                 callback_data=f"buy_country:{country['code']}"
             )
         ])
-    
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Bekor qilish", callback_data="close_message")])
-    
-    await call.message.edit_text(
-        "🌍 <b>Davlatni tanlang:</b>\n\n"
-        "Davlat nomi - Narxi - Mavjud raqamlar soni",
-        reply_markup=kb
-    )
+    await call.message.edit_text("🌍 <b>Davlatni tanlang:</b>\n\nDavlat nomi - Narxi - Mavjud raqamlar soni", reply_markup=kb)
     await call.answer()
 
 @dp.callback_query(F.data.startswith("buy_country:"))
 async def buy_show_country_info(call: CallbackQuery):
     country_code = call.data.split(":")[1]
-    
     async with get_db() as (cur, conn):
         await cur.execute(
             """SELECT c.*, 
@@ -1602,12 +1356,10 @@ async def buy_show_country_info(call: CallbackQuery):
         f"💰 Narxi: <b>{country['price']:,} so'm</b>\n\n"
         f"Ma'lumot bilan tanishib chiqib, sotib olish tugmasini bosing:"
     )
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛒 Sotib olish", callback_data=f"buy_confirm:{country_code}")],
         [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="buy_continue")]
     ])
-    
     await call.message.edit_text(text, reply_markup=kb)
     await call.answer()
 
@@ -1615,7 +1367,6 @@ async def buy_show_country_info(call: CallbackQuery):
 async def buy_process_purchase(call: CallbackQuery):
     user_id = call.from_user.id
     country_code = call.data.split(":")[1]
-    
     balances = await get_user_balance(user_id)
     
     async with get_db() as (cur, conn):
@@ -1624,21 +1375,17 @@ async def buy_process_purchase(call: CallbackQuery):
     
     if balances['purchase'] < country['price']:
         await call.answer(
-            f"❌ Balansingiz yetarli emas!\n"
-            f"Kerak: {country['price']:,} so'm\n"
-            f"Sizda: {balances['purchase']:,} so'm",
+            f"❌ Balansingiz yetarli emas!\nKerak: {country['price']:,} so'm\nSizda: {balances['purchase']:,} so'm",
             show_alert=True
         )
         return
     
     phone = await get_available_phone_by_country(country_code)
-    
     if not phone:
         await call.answer("❌ Kechirasiz, bu davlatda raqam qolmadi!", show_alert=True)
         return
     
     await update_balance(user_id, -country['price'], 'purchase')
-    
     async with get_db() as (cur, conn):
         await cur.execute(
             """UPDATE phone_numbers 
@@ -1646,16 +1393,12 @@ async def buy_process_purchase(call: CallbackQuery):
                WHERE id = %s""",
             (user_id, phone['id'])
         )
-        await cur.execute(
-            "UPDATE users SET total_purchased = total_purchased + 1 WHERE user_id = %s",
-            (user_id,)
-        )
+        await cur.execute("UPDATE users SET total_purchased = total_purchased + 1 WHERE user_id = %s", (user_id,))
         await conn.commit()
     
     if phone.get('proxy_id'):
         await proxy_manager.clear_cache(phone['proxy_id'])
     
-    # Adminga xabar yuborish
     phone['country_name'] = country['name']
     phone['price'] = country['price']
     await notify_admin_new_sale(phone, user_id, call.from_user.full_name)
@@ -1692,7 +1435,6 @@ async def buy_process_purchase(call: CallbackQuery):
 async def get_purchase_code(call: CallbackQuery):
     user_id = call.from_user.id
     phone_id = int(call.data.split(":")[1])
-    
     await call.answer("⏳ Kod olinmoqda...")
     
     if not hasattr(dp, 'temp_purchases') or user_id not in dp.temp_purchases:
@@ -1701,7 +1443,6 @@ async def get_purchase_code(call: CallbackQuery):
         return
     
     data = dp.temp_purchases[user_id]
-    
     try:
         await call.message.delete()
     except:
@@ -1714,21 +1455,12 @@ async def get_purchase_code(call: CallbackQuery):
         data.get('phone_id')
     )
     
-    await send_code_result_message(
-        call.message.chat.id,
-        data['phone'],
-        data['password'],
-        code,
-        is_new,
-        error,
-        phone_id
-    )
+    await send_code_result_message(call.message.chat.id, data['phone'], data['password'], code, is_new, error, phone_id)
 
 @dp.callback_query(F.data.startswith("refresh_purchase_code:"))
 async def refresh_purchase_code(call: CallbackQuery):
     user_id = call.from_user.id
     phone_id = int(call.data.split(":")[1])
-    
     await call.answer("🔄 Kod yangilanmoqda...")
     
     if not hasattr(dp, 'temp_purchases') or user_id not in dp.temp_purchases:
@@ -1737,7 +1469,6 @@ async def refresh_purchase_code(call: CallbackQuery):
         return
     
     data = dp.temp_purchases[user_id]
-    
     try:
         await call.message.delete()
     except:
@@ -1750,15 +1481,7 @@ async def refresh_purchase_code(call: CallbackQuery):
         data.get('phone_id')
     )
     
-    await send_code_result_message(
-        call.message.chat.id,
-        data['phone'],
-        data['password'],
-        code,
-        is_new,
-        error,
-        phone_id
-    )
+    await send_code_result_message(call.message.chat.id, data['phone'], data['password'], code, is_new, error, phone_id)
 
 @dp.callback_query(F.data.startswith("confirm_purchase:"))
 async def confirm_purchase_taken(call: CallbackQuery):
@@ -1771,24 +1494,16 @@ async def confirm_purchase_taken(call: CallbackQuery):
         return
     
     data = dp.temp_purchases[user_id]
-    
     try:
         await call.message.delete()
     except:
         pass
     
     session_string = await read_session_file(data['session_id'])
-    
     if session_string:
         proxy_config = proxy_manager.get_proxy_config(data.get('proxy_id')) if data.get('proxy_id') else None
         proxy = proxy_manager.create_proxy_client(proxy_config) if proxy_config else None
-        
-        client = TelegramClient(
-            StringSession(session_string), 
-            TELETHON_API_ID, 
-            TELETHON_API_HASH,
-            proxy=proxy
-        )
+        client = TelegramClient(StringSession(session_string), TELETHON_API_ID, TELETHON_API_HASH, proxy=proxy)
         try:
             await client.connect()
             if await client.is_user_authorized():
@@ -1799,7 +1514,6 @@ async def confirm_purchase_taken(call: CallbackQuery):
             await client.disconnect()
     
     await delete_session_folder(data['session_id'])
-    
     if data.get('proxy_id'):
         await proxy_manager.clear_cache(data['proxy_id'])
     
@@ -1815,7 +1529,6 @@ async def confirm_purchase_taken(call: CallbackQuery):
         f"⚠️ <b>Parolni darhol o'zgartirishni unutmang!</b>",
         reply_markup=get_main_menu(user_id)
     )
-    
     await call.answer("✅ Akkaunt qabul qilindi!")
 
 # ==================== ASOSIY PANEL: HISOBIM ====================
@@ -1823,7 +1536,6 @@ async def confirm_purchase_taken(call: CallbackQuery):
 async def show_balance(msg: Message):
     user = await get_or_create_user(msg.from_user.id, msg.from_user.full_name, msg.from_user.username)
     balances = await get_user_balance(msg.from_user.id)
-    
     text = (
         f"👤 <b>Hisobingiz</b>\n\n"
         f"🆔 ID: <code>{msg.from_user.id}</code>\n"
@@ -1852,7 +1564,6 @@ async def show_purchases(msg: Message):
     
     page_size = 5
     total_pages = (len(purchases) + page_size - 1) // page_size
-    
     await show_purchases_page(msg, purchases, 1, page_size, total_pages, is_first=True)
 
 async def show_purchases_page(msg_or_call, purchases, page, page_size, total_pages, is_first=False):
@@ -1861,11 +1572,9 @@ async def show_purchases_page(msg_or_call, purchases, page, page_size, total_pag
     page_purchases = purchases[start:end]
     
     text = f"🛒 <b>Xaridlarim</b>\n\n"
-    
     for i, purchase in enumerate(page_purchases, start + 1):
         country_name = purchase['country_name'] if purchase['country_name'] else 'Nomalum'
         sold_date = purchase['sold_at'].strftime('%d.%m.%Y %H:%M') if purchase['sold_at'] else 'Nomalum'
-        
         text += (
             f"{i}. <b>{country_name}</b>\n"
             f"   📞 Raqam: <code>{purchase['phone']}</code>\n"
@@ -1875,7 +1584,6 @@ async def show_purchases_page(msg_or_call, purchases, page, page_size, total_pag
         )
     
     text += f"📄 Sahifa: {page}/{total_pages}"
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[])
     
     nav_row = []
@@ -1886,7 +1594,6 @@ async def show_purchases_page(msg_or_call, purchases, page, page_size, total_pag
     
     if nav_row:
         kb.inline_keyboard.append(nav_row)
-    
     kb.inline_keyboard.append([InlineKeyboardButton(text="❌ Yopish", callback_data="close_message")])
     
     if is_first or hasattr(msg_or_call, 'answer'):
@@ -1907,7 +1614,6 @@ async def show_purchases_page(msg_or_call, purchases, page, page_size, total_pag
 @dp.callback_query(F.data.startswith("purchases_page:"))
 async def purchases_page_change(call: CallbackQuery):
     page = int(call.data.split(":")[1])
-    
     async with get_db() as (cur, conn):
         await cur.execute(
             """SELECT p.*, c.name as country_name, c.price as country_price
@@ -1921,7 +1627,6 @@ async def purchases_page_change(call: CallbackQuery):
     
     page_size = 5
     total_pages = (len(purchases) + page_size - 1) // page_size
-    
     await show_purchases_page(call.message, purchases, page, page_size, total_pages, is_first=False)
     await call.answer()
 
@@ -1929,9 +1634,7 @@ async def purchases_page_change(call: CallbackQuery):
 @dp.message(F.text == "💳 Hisob to'ldirish")
 async def deposit_start(msg: Message, state: FSMContext):
     await msg.answer(
-        f"💳 <b>Hisob to'ldirish</b>\n\n"
-        f"⬆️ Minimal to'ldirish: {MIN_DEPOSIT:,} so'm\n\n"
-        f"Qancha summa kiritmoqchisiz? (so'mda)",
+        f"💳 <b>Hisob to'ldirish</b>\n\n⬆️ Minimal to'ldirish: {MIN_DEPOSIT:,} so'm\n\nQancha summa kiritmoqchisiz? (so'mda)",
         reply_markup=get_cancel_keyboard()
     )
     await state.set_state(DepositStates.wait_amount)
@@ -1943,15 +1646,11 @@ async def deposit_get_amount(msg: Message, state: FSMContext):
         if amount < MIN_DEPOSIT:
             raise ValueError()
     except:
-        await msg.answer(
-            f"❌ Minimal to'ldirish summasi: {MIN_DEPOSIT:,} so'm",
-            reply_markup=get_cancel_keyboard()
-        )
+        await msg.answer(f"❌ Minimal to'ldirish summasi: {MIN_DEPOSIT:,} so'm", reply_markup=get_cancel_keyboard())
         return
     
     fee = int(amount * FEE_PERCENT / 100)
     total = amount - fee
-    
     await state.update_data(amount=total, fee=fee, total=amount)
     
     async with get_db() as (cur, conn):
@@ -1971,33 +1670,23 @@ async def deposit_get_amount(msg: Message, state: FSMContext):
         f"💵 To'lov qilinadi: <b>{amount:,} so'm</b>\n\n"
         f"To'lov qilgach, \"✅ To'lov qildim\" tugmasini bosing va chekni yuboring!"
     )
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ To'lov qildim", callback_data="deposit_paid")],
         [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_admin")]
     ])
-    
     await msg.answer(text, reply_markup=kb)
     await state.set_state(DepositStates.wait_receipt)
 
 @dp.callback_query(F.data == "deposit_paid")
 async def deposit_paid_callback(call: CallbackQuery, state: FSMContext):
-    await call.message.edit_text(
-        "📸 Iltimos, to'lov chekini (skrinshot yoki PDF) yuboring:",
-        reply_markup=get_cancel_keyboard()
-    )
+    await call.message.edit_text("📸 Iltimos, to'lov chekini (skrinshot yoki PDF) yuboring:", reply_markup=get_cancel_keyboard())
     await state.set_state(DepositStates.wait_receipt)
     await call.answer()
 
 @dp.message(DepositStates.wait_receipt, F.photo | F.document)
 async def deposit_receipt_received(msg: Message, state: FSMContext):
     data = await state.get_data()
-    
-    file_id = None
-    if msg.photo:
-        file_id = msg.photo[-1].file_id
-    elif msg.document:
-        file_id = msg.document.file_id
+    file_id = msg.photo[-1].file_id if msg.photo else msg.document.file_id
     
     async with get_db() as (cur, conn):
         await cur.execute(
@@ -2010,7 +1699,6 @@ async def deposit_receipt_received(msg: Message, state: FSMContext):
         await conn.commit()
     
     await state.clear()
-    
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_deposit:{request_id}"),
@@ -2028,23 +1716,17 @@ async def deposit_receipt_received(msg: Message, state: FSMContext):
         f"📅 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
     )
     
-    # Adminga yuborish va pin qilish
     if msg.photo:
         sent_msg = await bot.send_photo(ADMIN_ID, file_id, caption=caption, reply_markup=kb)
     else:
         sent_msg = await bot.send_document(ADMIN_ID, file_id, caption=caption, reply_markup=kb)
     
-    # Xabarni pin qilish
     try:
         await bot.pin_chat_message(ADMIN_ID, sent_msg.message_id)
     except Exception as e:
         print(f"Pin error: {e}")
     
-    await msg.answer(
-        "✅ To'lov so'rovingiz qabul qilindi!\n"
-        "Admin tasdiqlaganidan so'ng balansingizga pul qo'shiladi.",
-        reply_markup=get_main_menu(msg.from_user.id)
-    )
+    await msg.answer("✅ To'lov so'rovingiz qabul qilindi!\nAdmin tasdiqlaganidan so'ng balansingizga pul qo'shiladi.", reply_markup=get_main_menu(msg.from_user.id))
 
 @dp.callback_query(F.data.startswith("approve_deposit:"))
 async def approve_deposit(call: CallbackQuery):
@@ -2052,7 +1734,6 @@ async def approve_deposit(call: CallbackQuery):
         return await call.answer("⛔ Faqat admin!")
     
     request_id = int(call.data.split(":")[1])
-    
     async with get_db() as (cur, conn):
         await cur.execute("SELECT * FROM payment_requests WHERE id = %s AND status = 'pending'", (request_id,))
         request = await cur.fetchone()
@@ -2062,55 +1743,25 @@ async def approve_deposit(call: CallbackQuery):
         return
     
     await update_balance(request['user_id'], request['amount'], 'purchase')
-    
     async with get_db() as (cur, conn):
-        await cur.execute(
-            "UPDATE payment_requests SET status = 'approved', processed_at = NOW() WHERE id = %s",
-            (request_id,)
-        )
+        await cur.execute("UPDATE payment_requests SET status = 'approved', processed_at = NOW() WHERE id = %s", (request_id,))
         await conn.commit()
     
-    # Foydalanuvchiga xabar
     try:
-        await bot.send_message(
-            request['user_id'],
-            f"✅ To'lovingiz tasdiqlandi!\n\n"
-            f"💰 Hisobingizga {request['amount']:,} so'm qo'shildi!"
-        )
+        await bot.send_message(request['user_id'], f"✅ To'lovingiz tasdiqlandi!\n\n💰 Hisobingizga {request['amount']:,} so'm qo'shildi!")
     except:
         pass
     
-    # Admin xabarini yangilash va pin o'chirish
     try:
-        # Avval pin o'chirish
         await bot.unpin_chat_message(chat_id=ADMIN_ID, message_id=call.message.message_id)
-        
-        # Keyin xabarni o'chirish
         await call.message.delete()
-        
     except Exception as e:
         print(f"Pin/delete error: {e}")
-        # Agar o'chirishda xatolik bo'lsa, hech bo'lmasa xabarni yangilaymiz
-        try:
-            if call.message.caption:
-                new_text = call.message.caption + "\n\n✅ <b>TASDIQLANDI</b>"
-                await call.message.edit_caption(caption=new_text)
-            else:
-                new_text = call.message.text + "\n\n✅ <b>TASDIQLANDI</b>" if call.message.text else "✅ <b>TASDIQLANDI</b>"
-                await call.message.edit_text(new_text)
-        except:
-            pass
     
-    # Yangi xabar yuborish
     await bot.send_message(
         ADMIN_ID,
-        f"✅ <b>To'lov tasdiqlandi!</b>\n\n"
-        f"🆔 So'rov ID: {request_id}\n"
-        f"👤 Foydalanuvchi ID: <code>{request['user_id']}</code>\n"
-        f"💰 Summa: {request['amount']:,} so'm\n"
-        f"📅 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+        f"✅ <b>To'lov tasdiqlandi!</b>\n\n🆔 So'rov ID: {request_id}\n👤 Foydalanuvchi ID: <code>{request['user_id']}</code>\n💰 Summa: {request['amount']:,} so'm\n📅 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
     )
-    
     await call.answer("✅ To'lov tasdiqlandi!", show_alert=True)
 
 @dp.callback_query(F.data.startswith("reject_deposit:"))
@@ -2119,7 +1770,6 @@ async def reject_deposit(call: CallbackQuery):
         return await call.answer("⛔ Faqat admin!")
     
     request_id = int(call.data.split(":")[1])
-    
     async with get_db() as (cur, conn):
         await cur.execute("SELECT * FROM payment_requests WHERE id = %s AND status = 'pending'", (request_id,))
         request = await cur.fetchone()
@@ -2129,172 +1779,46 @@ async def reject_deposit(call: CallbackQuery):
         return
     
     async with get_db() as (cur, conn):
-        await cur.execute(
-            "UPDATE payment_requests SET status = 'rejected', processed_at = NOW() WHERE id = %s",
-            (request_id,)
-        )
+        await cur.execute("UPDATE payment_requests SET status = 'rejected', processed_at = NOW() WHERE id = %s", (request_id,))
         await conn.commit()
     
-    # Foydalanuvchiga xabar
     try:
-        await bot.send_message(
-            request['user_id'],
-            f"❌ To'lovingiz rad etildi!\n\n"
-            f"Iltimos, to'g'ri ma'lumotlar bilan qaytadan urinib ko'ring."
-        )
+        await bot.send_message(request['user_id'], "❌ To'lovingiz rad etildi!\n\nIltimos, to'g'ri ma'lumotlar bilan qaytadan urinib ko'ring.")
     except:
         pass
     
-    # Admin xabarini yangilash va pin o'chirish
     try:
-        # Avval pin o'chirish
         await bot.unpin_chat_message(chat_id=ADMIN_ID, message_id=call.message.message_id)
-        
-        # Keyin xabarni o'chirish
         await call.message.delete()
-        
     except Exception as e:
         print(f"Pin/delete error: {e}")
-        # Agar o'chirishda xatolik bo'lsa, hech bo'lmasa xabarni yangilaymiz
-        try:
-            if call.message.caption:
-                new_text = call.message.caption + "\n\n❌ <b>RAD ETILDI</b>"
-                await call.message.edit_caption(caption=new_text)
-            else:
-                new_text = call.message.text + "\n\n❌ <b>RAD ETILDI</b>" if call.message.text else "❌ <b>RAD ETILDI</b>"
-                await call.message.edit_text(new_text)
-        except:
-            pass
-    
-    # Yangi xabar yuborish
-    await bot.send_message(
-        ADMIN_ID,
-        f"❌ <b>To'lov rad etildi!</b>\n\n"
-        f"🆔 So'rov ID: {request_id}\n"
-        f"👤 Foydalanuvchi ID: <code>{request['user_id']}</code>\n"
-        f"💰 Summa: {request['amount']:,} so'm\n"
-        f"📅 Sana: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
-    )
     
     await call.answer("❌ To'lov rad etildi!", show_alert=True)
 
-# ==================== DATABASE INITIALIZATION ====================
+# ==================== WEB SERVER (RENDER KEEP-ALIVE) ====================
+async def handle_ping(request):
+    return web.Response(text="OK, Bot running!")
 
-async def init_database():
-    """Ma'lumotlar bazasini ishga tushirish"""
-    pool = await DatabasePool.get_pool()
-    async with pool.acquire() as conn:
-        async with conn.cursor() as cur:
-            # Database charsetini utf8mb4 ga o'tkazish
-            await cur.execute("SET NAMES utf8mb4")
-            await cur.execute("ALTER DATABASE nomerbot CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-            
-            # Users table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS users (
-                    user_id BIGINT PRIMARY KEY,
-                    fullname VARCHAR(255),
-                    username VARCHAR(255),
-                    purchase_balance INT DEFAULT 0,
-                    withdraw_balance INT DEFAULT 0,
-                    total_purchased INT DEFAULT 0,
-                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_active TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Countries table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS countries (
-                    code VARCHAR(10) PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL,
-                    phone_prefix VARCHAR(10) DEFAULT '+',
-                    price INT DEFAULT 0
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Phone numbers table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS phone_numbers (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    phone VARCHAR(20) NOT NULL,
-                    country_code VARCHAR(10) NOT NULL,
-                    session_id VARCHAR(255) NOT NULL,
-                    password TEXT,
-                    price INT NOT NULL,
-                    status ENUM('available', 'sold', 'returned') DEFAULT 'available',
-                    seller_id BIGINT NOT NULL,
-                    buyer_id BIGINT DEFAULT NULL,
-                    proxy_id INT DEFAULT NULL,
-                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    sold_at TIMESTAMP NULL,
-                    has_2fa BOOLEAN DEFAULT FALSE,
-                    FOREIGN KEY (country_code) REFERENCES countries(code) ON DELETE CASCADE
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Payment methods table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS payment_methods (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    name VARCHAR(100) NOT NULL,
-                    card_number VARCHAR(100) NOT NULL,
-                    card_owner VARCHAR(255),
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Payment requests table
-            await cur.execute("""
-                CREATE TABLE IF NOT EXISTS payment_requests (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    user_id BIGINT NOT NULL,
-                    amount INT NOT NULL,
-                    fee INT NOT NULL,
-                    total_amount INT NOT NULL,
-                    type ENUM('deposit', 'withdraw') NOT NULL,
-                    status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
-                    receipt_file_id TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    processed_at TIMESTAMP NULL
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-            """)
-            
-            # Mavjud jadvallarni utf8mb4 ga o'tkazish
-            tables = ['users', 'countries', 'phone_numbers', 'payment_methods', 'payment_requests']
-            for table in tables:
-                try:
-                    await cur.execute(f"ALTER TABLE {table} CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci")
-                    print(f"✅ {table} charset utf8mb4 ga o'tkazildi")
-                except Exception as e:
-                    print(f"ℹ️ {table}: {e}")
-            
-            # proxy_id ustunini qo'shish
-            try:
-                await cur.execute("ALTER TABLE phone_numbers ADD COLUMN proxy_id INT DEFAULT NULL")
-                print("✅ proxy_id ustuni qo'shildi")
-            except Exception:
-                print("ℹ️ proxy_id ustuni allaqachon mavjud")
-            
-            await conn.commit()
-    
-    os.makedirs(SESSIONS_DIR, exist_ok=True)
-    print("✅ MySQL ma'lumotlar bazasi tayyor!")
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', handle_ping)
+    app.router.add_get('/health', handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"🌐 Web server {port}-portda ishga tushdi.")
 
+# ==================== MAIN EXECUTION ====================
 async def main():
-    """Botni ishga tushirish"""
-    await init_database()
+    os.makedirs(SESSIONS_DIR, exist_ok=True)
     
-    try:
-        import socks
-        print("✅ PySocks kutubxonasi mavjud")
-    except ImportError:
-        print("❌ PySocks o'rnatilmagan! pip install PySocks")
-        return
+    # Web serverni Render uchun parallel yuritish
+    await start_web_server()
     
-    print("✅ Bot ishga tushdi!")
-    
+    # Bot pollingni boshlash
+    print("🚀 Bot muvaffaqiyatli ishga tushdi!")
     try:
         await dp.start_polling(bot)
     finally:
